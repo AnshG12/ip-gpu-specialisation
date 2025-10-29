@@ -1,0 +1,187 @@
+# CUDA Parallel Image Pipeline Makefile
+
+# Compiler settings
+NVCC := nvcc
+CXX := g++
+
+# CUDA architecture (adjust for your GPU)
+# sm_60: Pascal (GTX 10xx, Tesla P100)
+# sm_75: Turing (RTX 20xx, Tesla T4)
+# sm_86: Ampere (RTX 30xx, A100)
+CUDA_ARCH := sm_75
+
+# Compilation flags
+NVCC_FLAGS := -std=c++14 -O3 -arch=$(CUDA_ARCH) \
+              -Xcompiler -Wall,-Wextra,-fPIC \
+              --use_fast_math \
+              -lineinfo
+
+CXX_FLAGS := -std=c++17 -O3 -Wall -Wextra -fPIC
+
+# OpenCV flags
+OPENCV_FLAGS := $(shell pkg-config --cflags --libs opencv4)
+
+# CUDA paths
+CUDA_PATH := /usr/local/cuda
+CUDA_INC := -I$(CUDA_PATH)/include
+CUDA_LIB := -L$(CUDA_PATH)/lib64 -lcudart -lcuda
+
+# Include directories
+INC_DIRS := -Iinclude $(CUDA_INC)
+
+# Directories
+SRC_DIR := src
+OBJ_DIR := obj
+BIN_DIR := bin
+INC_DIR := include
+
+# Source files
+CUDA_SRCS := $(wildcard $(SRC_DIR)/*.cu)
+CPP_SRCS := $(wildcard $(SRC_DIR)/*.cpp)
+
+# Object files
+CUDA_OBJS := $(patsubst $(SRC_DIR)/%.cu,$(OBJ_DIR)/%.o,$(CUDA_SRCS))
+CPP_OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(CPP_SRCS))
+
+ALL_OBJS := $(CUDA_OBJS) $(CPP_OBJS)
+
+# Target executable
+TARGET := $(BIN_DIR)/cuda_image_pipeline
+
+# Default target
+.PHONY: all
+all: $(TARGET)
+
+# Link target
+$(TARGET): $(ALL_OBJS) | $(BIN_DIR)
+	@echo "Linking $@..."
+	$(NVCC) $(NVCC_FLAGS) $^ -o $@ $(CUDA_LIB) $(OPENCV_FLAGS)
+	@echo "Build complete: $@"
+
+# Compile CUDA source files
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cu | $(OBJ_DIR)
+	@echo "Compiling CUDA: $<"
+	$(NVCC) $(NVCC_FLAGS) $(INC_DIRS) -c $< -o $@
+
+# Compile C++ source files
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp | $(OBJ_DIR)
+	@echo "Compiling C++: $<"
+	$(CXX) $(CXX_FLAGS) $(INC_DIRS) $(OPENCV_FLAGS) -c $< -o $@
+
+# Create directories
+$(BIN_DIR) $(OBJ_DIR):
+	@mkdir -p $@
+
+# Clean build artifacts
+.PHONY: clean
+clean:
+	@echo "Cleaning..."
+	rm -rf $(OBJ_DIR) $(BIN_DIR)
+	@echo "Clean complete"
+
+# Deep clean (including data outputs)
+.PHONY: distclean
+distclean: clean
+	rm -rf data/output/*
+	rm -rf data/benchmarks/*
+
+# Debug build
+.PHONY: debug
+debug: NVCC_FLAGS += -g -G -DDEBUG
+debug: CXX_FLAGS += -g -DDEBUG
+debug: clean $(TARGET)
+
+# Profile build
+.PHONY: profile
+profile: NVCC_FLAGS += -lineinfo
+profile: clean $(TARGET)
+
+# Run basic test
+.PHONY: test
+test: $(TARGET)
+	@echo "Running basic test..."
+	./$(TARGET) --input data/input --output data/output --filter gaussian_blur --batch-size 16
+
+# Run benchmark suite
+.PHONY: benchmark
+benchmark: $(TARGET)
+	@echo "Running benchmark suite..."
+	./scripts/run_benchmark.sh
+
+# Check CUDA installation
+.PHONY: check-cuda
+check-cuda:
+	@echo "Checking CUDA installation..."
+	@which nvcc > /dev/null 2>&1 && echo "✓ nvcc found: $$(which nvcc)" || echo "✗ nvcc not found"
+	@which nvidia-smi > /dev/null 2>&1 && echo "✓ nvidia-smi found" || echo "✗ nvidia-smi not found"
+	@nvidia-smi > /dev/null 2>&1 && echo "✓ CUDA driver loaded" || echo "✗ CUDA driver not loaded"
+	@pkg-config --exists opencv4 && echo "✓ OpenCV 4 found" || echo "✗ OpenCV 4 not found"
+
+# Show GPU info
+.PHONY: gpu-info
+gpu-info:
+	@nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
+
+# Generate compilation database for IDEs
+.PHONY: compile-commands
+compile-commands:
+	@echo "Generating compile_commands.json..."
+	@bear -- make clean all
+
+# Install dependencies (Ubuntu/Debian)
+.PHONY: install-deps
+install-deps:
+	sudo apt update
+	sudo apt install -y build-essential cmake pkg-config
+	sudo apt install -y libopencv-dev
+	sudo apt install -y nvidia-cuda-toolkit
+
+# Create data directories
+.PHONY: setup-dirs
+setup-dirs:
+	@mkdir -p data/input data/output data/benchmarks
+	@echo "Data directories created"
+
+# Download sample images
+.PHONY: download-samples
+download-samples: setup-dirs
+	@echo "Downloading sample images..."
+	@./scripts/download_dataset.sh --count 100
+
+# Help target
+.PHONY: help
+help:
+	@echo "CUDA Parallel Image Pipeline - Build System"
+	@echo ""
+	@echo "Available targets:"
+	@echo "  all              - Build the project (default)"
+	@echo "  clean            - Remove build artifacts"
+	@echo "  distclean        - Remove build artifacts and outputs"
+	@echo "  debug            - Build with debug symbols"
+	@echo "  profile          - Build with profiling enabled"
+	@echo "  test             - Run basic functionality test"
+	@echo "  benchmark        - Run full benchmark suite"
+	@echo "  check-cuda       - Verify CUDA installation"
+	@echo "  gpu-info         - Display GPU information"
+	@echo "  setup-dirs       - Create required directories"
+	@echo "  download-samples - Download sample images"
+	@echo "  install-deps     - Install dependencies (Ubuntu/Debian)"
+	@echo "  help             - Show this help message"
+	@echo ""
+	@echo "Example usage:"
+	@echo "  make                          # Build project"
+	@echo "  make CUDA_ARCH=sm_86          # Build for specific GPU"
+	@echo "  make test                     # Build and run test"
+	@echo "  make clean all                # Clean rebuild"
+
+# Dependency tracking (optional but recommended)
+-include $(ALL_OBJS:.o=.d)
+
+# Generate dependency files
+$(OBJ_DIR)/%.d: $(SRC_DIR)/%.cu | $(OBJ_DIR)
+	@$(NVCC) $(NVCC_FLAGS) $(INC_DIRS) -M $< | \
+		sed 's,\($*\)\.o[ :]*,$(OBJ_DIR)/\1.o $@ : ,g' > $@
+
+$(OBJ_DIR)/%.d: $(SRC_DIR)/%.cpp | $(OBJ_DIR)
+	@$(CXX) $(CXX_FLAGS) $(INC_DIRS) $(OPENCV_FLAGS) -MM $< | \
+		sed 's,\($*\)\.o[ :]*,$(OBJ_DIR)/\1.o $@ : ,g' > $@
